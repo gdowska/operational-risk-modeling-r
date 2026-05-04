@@ -1,0 +1,1784 @@
+---
+title: "Projekt rozszerzony"
+author: "Małgorzata Gdowska"
+date: "2026-04-17"
+output:
+  html_document:
+    toc: true  
+    toc_float: true        
+    toc_collapsed: true
+    toc_depth: 3   
+    code_folding: hide
+    number_sections: true
+---
+
+```{r, message=FALSE, warning=FALSE}
+# Biblioteki wykorzystane w projekcie 
+
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(fitdistrplus)
+```
+
+# Dopasowywanie rozkładów
+
+W pierwszej kolejności dla każdej linii wyznaczono roczną liczbę strat, a następnie jej średnią oraz wariancję. 
+
+```{r, message=FALSE}
+dane <- read.csv("C:/STUDIA/6 semestr/MRK/ryzyko operacyjne/plik7.csv")
+dane <- dane[,-1]
+
+czestosc <- dane %>%
+  group_by(linia, rok) %>%
+  summarise(liczba_strat = n()) %>%
+  ungroup()
+
+statystyki <- czestosc %>%
+  group_by(linia) %>%
+  summarise(
+    srednia = mean(liczba_strat),
+    wariancja = var(liczba_strat)) %>%
+  ungroup()
+```
+
+Dokonano wstępnego wyboru rozkładu częstości strat na podstawie porównania średniej oraz wariancji z próby według przyjętego kryterium:
+
+$$
+\begin{aligned}
+E(X) > D^2(X) &\quad \rightarrow \text{ rozkład dwumianowy} \\
+E(X) = D^2(X) &\quad \rightarrow \text{ rozkład Poissona} \\
+E(X) < D^2(X) &\quad \rightarrow \text{ rozkład ujemny dwumianowy}
+\end{aligned}
+$$
+
+```{r, echo=FALSE}
+statystyki <- statystyki %>%
+  mutate(
+    rozklad = case_when(
+      abs(srednia - wariancja) < 1 ~ "Poisson",
+      srednia < wariancja ~ "Ujemny dwumianowy",
+      srednia > wariancja ~ "Dwumianowy"
+    )
+  )
+
+kable(statystyki, caption = "Wstępny dobór rozkładu częstości strat") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+Dominują rozkłady dwumianowe i ujemne dwumianowe. Wyjątkiem jest linia External_Fr, dla której średnia i wariancja są najbardziej zbliżone, co sugeruje zastosowanie rozkładu Poissona. W dalszej części ich dobór zostanie zweryfikowany przy użyciu testu chi-kwadrat, który jest odpowiedni dla zmiennych dyskretnych (liczba strat). 
+
+
+Dla każdej linii osobno dopasowane zostaną również wybrane rozkłady dla dotkliwości strat. W tym przypadku rozważam rozkłady:
+
+- gamma
+- lognormalny
+- Weibulla
+- wykładniczy
+
+W przypadku każdego testu zgodności hipotezy są następujące:
+
+- $H_0:$ dane pochodzą z rozważanego rozkładu
+- $H_1:$ dane nie pochodzą z rozważanego rozkładu
+
+## Buss_Distr
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+Ze względu na zbliżone wartości średniej i wariancji dla linii Buss_Distr, oprócz rozkładu ujemnego dwumianowego zostanie sprawdzony również rozkład Poissona. 
+
+```{r, warning=FALSE}
+czestosci_Buss_Distr <- czestosc %>%
+  filter(linia == "Buss_Distr") %>%
+  pull(liczba_strat) 
+
+fit_ujemny_Buss_Distr <- fitdist(czestosci_Buss_Distr, "nbinom", method = "mme")
+
+fit_pois_Buss_Distr <- fitdist(czestosci_Buss_Distr, "pois", method = "mme")
+
+wynik_pois_Buss_Distr <- gofstat(fit_pois_Buss_Distr)
+
+wynik_ujemny_Buss_Distr <- gofstat(fit_ujemny_Buss_Distr)
+
+tabela_Buss_Distr <- data.frame(
+  Rozklad = c("Poisson", "Ujemny dwumianowy"),
+  
+  statystyka = c(round(wynik_pois_Buss_Distr$chisq, 4),
+    round(wynik_ujemny_Buss_Distr$chisq, 4)),
+  
+  df = c(wynik_pois_Buss_Distr$chisqdf,
+    wynik_ujemny_Buss_Distr$chisqdf),
+  
+  p_value = c(round(wynik_pois_Buss_Distr$chisqpvalue, 4),
+    round(wynik_ujemny_Buss_Distr$chisqpvalue, 4)))
+```
+
+```{r, echo=FALSE}
+kable(tabela_Buss_Distr, caption = "Porównanie dopasowania rozkładów (Poisson i Ujemny dwumianowy)") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "10em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+
+W obu przypadkach brak podstaw do odrzucenia hipotezy zerowej. Mimo wyższego p-value dla rozkładu Poissona, rozkład ujemny dwumianowy osiąga niższą wartością statystyki testowej, co wskazuje na lepsze dopasowanie do danych. Dodatkowo, wariancja przewyższa średnią, dlatego jako bardziej odpowiedni przyjęto rozkład ujemny dwumianowy.
+
+```{r}
+rozmiar_ujemny_Buss_Distr <- fit_ujemny_Buss_Distr$estimate["size"]
+srednia_ujemny_Buss_Distr <- fit_ujemny_Buss_Distr$estimate["mu"]
+```
+
+Oszacowane parametry rozkładu ujemnego dwumianowego:
+
+- $\text{size} = `r round(rozmiar_ujemny_Buss_Distr, 4)`$
+- $\mu = `r round(srednia_ujemny_Buss_Distr, 4)`$ 
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_Buss_Distr <- dane %>%
+  filter(linia == "Buss_Distr") %>%
+  pull(strata) 
+
+fit_gamma_Buss_Distr <- fitdist(straty_Buss_Distr, "gamma", method = "mme")
+
+fit_lognorm_Buss_Distr <- fitdist(straty_Buss_Distr, "lnorm", method = "mme")
+
+fit_weibull_Buss_Distr <- fitdist(straty_Buss_Distr, "weibull")
+
+fit_exp_Buss_Distr <- fitdist(straty_Buss_Distr, "exp", method = "mme")
+
+test_Buss_Distr <- gofstat(list(fit_gamma_Buss_Distr, fit_lognorm_Buss_Distr, fit_weibull_Buss_Distr, fit_exp_Buss_Distr))
+
+tabela_Buss_Distr <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+ `p-value (χ²)` = round(test_Buss_Distr$chisqpvalue, 4),
+  
+  KS = round(test_Buss_Distr$ks, 4),
+  
+ `Decyzja KS` = test_Buss_Distr$kstest,
+  
+  AD = round(test_Buss_Distr$ad, 4),
+  
+ `Decyzja AD` = test_Buss_Distr$adtest,
+  
+  AIC = round(test_Buss_Distr$aic, 2),
+  BIC = round(test_Buss_Distr$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+```{r, echo=FALSE}
+best <- which.min(tabela_Buss_Distr$AIC)
+
+kable(tabela_Buss_Distr,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  row_spec(best, bold = TRUE, background = "#f2f2f2") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+```{r}
+denscomp(list(fit_gamma_Buss_Distr,
+              fit_lognorm_Buss_Distr,
+              fit_weibull_Buss_Distr,
+              fit_exp_Buss_Distr),
+         legendtext = c("gamma", "lognormal", "weibull", "wykładniczy"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+         fitlwd = c(3, 3, 3, 3),
+         main = "Porównanie dopasowania rozkładów",
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+```
+
+Wartości statystyk Kołmogorowa–Smirnowa oraz Andersona–Darlinga dla rozkładów wykładniczego, Weibulla oraz gamma wskazują na podobny poziom dopasowania. Należy mieć też na uwadze fakt, że dla wszystkich rozkładów poza Weibullem nie została wyznaczona decyzja testowa dla statystyki Andersona-Darlinga, więc wykorzystuję ją głównie do porównywania. Zgodnie z dokumentacją pakietu `fitdistrplus` wynika to z faktu, że dla niektórych rozkładów nie są znane odpowiednie wartości krytyczne, co uniemożliwia interpretację wartości statystyki testowej.
+
+Rozkład lognormalny wyraźnie odstaje, osiągając wyższe wartości obu statystyk, dodatkowo jako jedyny został odrzucony na podstawie testu chi-kwadrat oraz Kołmogorowa–Smirnowa, co potwierdza jego słabe dopasowanie.
+
+Najniższe wartości statystyki Andersona-Darlinga oraz kryteriów AIC i BIC uzyskał rozkład wykładniczy, co wskazuje na jego najlepsze dopasowanie. Rozkład weibulla również dobrze odwzorowuje dane, choć nieco gorzej od wykładniczego. Rozkład gamma wypada delikatnie słabiej niż oba powyższe modele. 
+
+Widoczne jest to również na wykresie - rozkłady wykładniczy, Weibulla oraz gamma wydają się dość dobrze odwzorowywać dane, natomiast lognormalny odbiega od danych.
+
+```{r}
+rate_exp_Buss_Distr <- fit_exp_Buss_Distr$estimate
+```
+
+Oszacowane parametry rozkładu wykładniczego:
+
+- $\text{rate} = `r rate_exp_Buss_Distr`$
+
+## Com_Ban
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+czestosci_Com_Ban <- czestosc %>%
+  filter(linia == "Com_Ban") %>%
+  pull(liczba_strat) 
+
+fit_ujemny_Com_Ban <- fitdist(czestosci_Com_Ban, "nbinom", method = "mle")
+
+wynik_Com_Ban <- gofstat(fit_ujemny_Com_Ban)
+
+tabela_Com_Ban <- data.frame(
+  statystyka = round(wynik_Com_Ban$chisq, 4),
+  df = wynik_Com_Ban$chisqdf,
+  p_value = round(wynik_Com_Ban$chisqpvalue, 4))
+```
+
+```{r, echo=FALSE}
+kable(tabela_Com_Ban, caption = "Ocena dopasowania rozkładu ujemnego dwumianowego") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "9em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+
+Brak podstaw do odrzucenia hipotezy zerowej. Wariancja liczby strat dla tej linii jest ok. 2 razy większa od średniej, co dodatkowo potwierdza zasadność wyboru rozkładu ujemnego dwumianowego. 
+
+```{r}
+rozmiar_ujemny_Com_Ban <- fit_ujemny_Com_Ban$estimate["size"]
+srednia_ujemny_Com_Ban <- fit_ujemny_Com_Ban$estimate["mu"]
+```
+
+Oszacowane parametry rozkładu ujemnego dwumianowego:
+
+- $\text{size} = `r round(rozmiar_ujemny_Com_Ban, 4)`$
+- $\mu = `r round(srednia_ujemny_Com_Ban, 4)`$ 
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_Com_Ban <- dane %>%
+  filter(linia == "Com_Ban") %>%
+  pull(strata) 
+
+fit_gamma_Com_Ban <- fitdist(straty_Com_Ban, method = "mme", "gamma")
+
+fit_lognorm_Com_Ban <- fitdist(straty_Com_Ban, method = "mme", "lnorm")
+
+fit_weibull_Com_Ban <- fitdist(straty_Com_Ban, "weibull")
+
+fit_exp_Com_Ban <- fitdist(straty_Com_Ban, method = "mme", "exp")
+
+test_Com_Ban <- gofstat(list(fit_gamma_Com_Ban, fit_lognorm_Com_Ban, fit_weibull_Com_Ban, fit_exp_Com_Ban))
+
+tabela_Com_Ban <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+  `p-value (χ²)` = round(test_Com_Ban$chisqpvalue, 4),
+  
+  KS = round(test_Com_Ban$ks, 4),
+  
+ `Decyzja KS` = test_Com_Ban$kstest,
+  
+  AD = round(test_Com_Ban$ad, 4),
+  
+ `Decyzja AD` = test_Com_Ban$adtest,
+  
+  AIC = round(test_Com_Ban$aic, 2),
+  BIC = round(test_Com_Ban$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+```{r, echo=FALSE}
+best <- which.min(tabela_Com_Ban$AIC)
+
+kable(tabela_Com_Ban,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  row_spec(best, bold = TRUE, background = "#f2f2f2") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+```{r}
+denscomp(list(fit_gamma_Com_Ban,
+              fit_lognorm_Com_Ban,
+              fit_weibull_Com_Ban,
+              fit_exp_Com_Ban),
+         legendtext = c("gamma", "lognormal", "weibull", "wykładniczy"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+         fitlwd = c(3, 3, 3, 3),
+         main = "Porównanie dopasowania rozkładów",
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+```
+
+W przypadku linii Com_Ban rozkłady gamma, Weibulla oraz wykładniczy zostały odrzucone przez test chi-kwadrat oraz Kołomogorowa-Smirnowa. Rozkład Weibulla został dodatkowo odrzucony przez test Andersona-Darlinga, a dla pozostałych podobnie jak w przypadku poprzedniej linii nie została wyznaczona decyzja testowa. 
+
+Jedynym rozkładem w przypadku, którego hipoteza zerowa nie została odrzucona (chi-kwadrat oraz Kołomogorowa-Smironowa) jest rozkład lognormalny. Osiąga on też najniższe wartości statystyk Kołomogorowa-Smirnowa i Andersona-Darlinga oraz kryteriów AIC i BIC, co wskazuje na jego najlepsze dopasowanie spośród rozważanych rozkładów. 
+
+Na wykresie również rozkład lognormalny wydaje się najlepiej odzwierciedlać dane. Najdokładniej odwzorowuje szczyt histogramu (na początku, gdzie widać największą koncentrację danych). Pozostałe rozkłady gorzej oddają tę część, natomiast w dalszej części rozkładu różnice są mniejsze. 
+
+```{r}
+meanlog_Com_Ban <- fit_lognorm_Com_Ban$estimate["meanlog"]
+sdlog_Com_Ban <- fit_lognorm_Com_Ban$estimate["sdlog"]
+```
+
+
+Oszacowane parametry rozkładu lognormalnego:
+
+- $\text{meanlog} = `r round(meanlog_Com_Ban, 4)`$
+- $\text{sdlog} = `r round(sdlog_Com_Ban, 4)`$
+
+
+## Damage 
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+W przypadku rozkładu dwumianowego, aby wyestymować go przy pomocy funkcji `fitdist` konieczne jest wcześniejsze określenie liczby prób n. Nie wynika ona bezpośrednio z danych. W praktyce parametr byłby znany z kontekstu (np. liczba wszystkich operacji), jednak w tym przypadku nie posiadamy takich informacji. W związku z tym estymuję go na podstawie zależności wynikających z metody momentów.  
+
+Dla rozkładu dwumianowego:
+
+$$
+E(X) = np, \qquad D^2(X) = np(1 - p)
+$$
+
+Z powyższych zależności otrzymujemy:
+
+$$
+p = 1 - \frac{D^2(X)}{E(X)}
+$$
+
+$$
+n = \frac{E(X)}{p}
+$$
+
+Ze względu na to, że przewaga wariancji nad średnią nie jest duża, oprócz rozkładu dwumianowego zweryfikowany zostanie również rozkład Poissona.  
+
+```{r, warning=FALSE}
+czestosci_Damage <- czestosc %>%
+  filter(linia == "Damage") %>%
+  pull(liczba_strat) 
+
+p_Damage <- 1 - (statystyki$wariancja[statystyki$linia == "Damage"]/statystyki$srednia[statystyki$linia == "Damage"])
+
+n_Damage <- round(statystyki$srednia[statystyki$linia == "Damage"]/p_Damage)
+
+fit_binom_Damage <- fitdist(czestosci_Damage, "binom", fix.arg = list(size = n_Damage))
+
+wynik_binom_Damage <- gofstat(fit_binom_Damage)
+
+fit_pois_Damage <- fitdist(czestosci_Damage, "pois")
+
+wynik_pois_Damage <- gofstat(fit_pois_Damage)
+
+tabela_Damage <- data.frame(
+  Rozklad = c("Poisson", "Dwumianowy"),
+  
+  statystyka = c(round(wynik_pois_Damage$chisq, 4),
+    round(wynik_binom_Damage$chisq, 4)),
+  
+  df = c(wynik_pois_Damage$chisqdf,
+    wynik_binom_Damage$chisqdf),
+  
+  p_value = c(round(wynik_pois_Damage$chisqpvalue, 4),
+    round(wynik_binom_Damage$chisqpvalue, 4)))
+```
+
+
+```{r, echo=FALSE}
+kable(tabela_Damage, caption = "Porównanie dopasowania rozkładów (Poisson i dwumianowy)") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "9em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+
+Mimo wszystko, rozkład dwumionowy ma nieco lepsze dopasowanie. W obu przypadkach brak podstaw do odrzucenia hipotezy zerowej, ale dwumianowy osiąga niższą wartość statystyki testowej. 
+
+```{r}
+p_Damage <- fit_binom_Damage$estimate
+```
+
+
+Oszacowane parametry rozkładu dwumianowego:
+
+- $n = `r n_Damage`$
+- $p = `r round(p_Damage, 4)`$
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_Damage <- dane %>%
+  filter(linia == "Damage") %>%
+  pull(strata) 
+
+fit_gamma_Damage <- fitdist(straty_Damage, method = "mme", "gamma")
+
+fit_lognorm_Damage <- fitdist(straty_Damage, method = "mme", "lnorm")
+
+fit_weibull_Damage <- fitdist(straty_Damage, "weibull")
+
+fit_exp_Damage <- fitdist(straty_Damage, method = "mme", "exp")
+
+test_Damage <- gofstat(list(fit_gamma_Damage, fit_lognorm_Damage, fit_weibull_Damage, fit_exp_Damage))
+
+tabela_Damage <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+  `p-value (χ²)` = round(test_Damage$chisqpvalue, 4),
+  
+  KS = round(test_Damage$ks, 4),
+  
+ `Decyzja KS` = test_Damage$kstest,
+  
+  AD = round(test_Damage$ad, 4),
+  
+ `Decyzja AD` = test_Damage$adtest,
+  
+  AIC = round(test_Damage$aic, 2),
+  BIC = round(test_Damage$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+```{r, echo=FALSE}
+
+kable(tabela_Damage,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+
+```{r}
+par(mfrow = c(1, 2))
+
+hist(straty_Damage,
+     breaks = 50,
+     col = "lightgrey",
+     main = "Histogram strat",
+     xlab = "Wartość straty",
+     ylab = "Liczba obserwacji")
+
+denscomp(list(fit_gamma_Damage,
+              fit_lognorm_Damage,
+              fit_weibull_Damage,
+              fit_exp_Damage),
+         legendtext = c("Gamma", "Lognormal", "Weibull", "exp"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+         fitlwd = c(3, 3, 3, 3),
+         main = "Dopasowanie rozkładów",
+         xlim = c(10, 2000),
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+         
+
+par(mfrow = c(1, 1))
+```
+
+Dla linii Damage wyniki testów nie pozwalają na jednoznaczy wybór rozkładu. Wszystkie rozważane modele zostały odrzucone na podstawie testu chi-kwadrat oraz Kołmogorowa–Smirnowa. Dodatkowo statystyki Andersona–Darlinga przyjmują bardzo wysokie wartości, a dla wszystkich rozkładów poza Weibullem nie było możliwe wyznaczenie decyzji testowej.
+
+Wynika to najprawdopodobniej ze struktury danych - występuje duża liczba identycznych obserwacji równych 10, co powoduje silną koncentrację wartości przy minimum, a jednocześnie obecne są bardzo duże straty, tworzące długi ogon rozkładu. Prowadzi to do silnej asymetrii prawostronnej i utrudnia dopasowanie rozkładu. 
+
+Pomimo tego, że Weibull uzyskał najniższe wartości statystyk oraz kryteriów informacyjnych wszystkie testy jednoznacznie go odrzuciły. W związku z tym, zgodnie z treścią polecenia, do dalszej analizy przyjęto rozkład lognormalny.
+
+Na histogramie widoczna jest wyraźna asymetria prawostronna - większość obserwacji koncentruje się przy bardzo małych wartościach, co potwierdza wysoki słupek dla wartości około 10. Jednocześnie rozkład posiada długi ogon, wskazujący na występowanie rzadkich i bardzo dużych strat.
+
+Z kolei na wykresie dopasowania wizualnie najlepiej wygląda rozkład Weibulla - odwzorowuje bardzo wysoki pik przy małych wartościach strat. Istnieje jednak możliwość, że wynika to z faktu, że bardzo dokładnie dopasowuje się on do tej dominującej części danych (dużej liczby wartości równych 10), przez co gorzej odwzorowuje pozostałą część rozkładu. Mogłoby to potwierdzać odrzucenie przez test Andersona-Darlinga, ponieważ zwraca on dużą uwagę na ogon rozkładu. Pozostałe rozkłady, w tym gamma i lognormalny, są bardziej wygładzone i nie odwzorowują tak dokładnie maksimum histogramu, natomiast rozkład wykładniczy jest praktycznie płaski.
+
+```{r}
+meanlog_Damage <- fit_lognorm_Damage$estimate["meanlog"]
+sdlog_Damage <- fit_lognorm_Damage$estimate["sdlog"]
+```
+
+
+Oszacowane parametry rozkładu lognormalnego:
+
+- $\text{meanlog} = `r round(meanlog_Damage, 4)`$
+- $\text{sdlog} = `r round(sdlog_Damage, 4)`$
+
+## Empl_Pract
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+czestosci_Empl_Pract <- czestosc %>%
+  filter(linia == "Empl_Pract") %>%
+  pull(liczba_strat)
+
+p_Empl_Pract <- 1 - (statystyki$wariancja[statystyki$linia == "Empl_Pract"]/statystyki$srednia[statystyki$linia == "Empl_Pract"])
+
+n_Empl_Pract <- round(statystyki$srednia[statystyki$linia == "Empl_Pract"]/p_Empl_Pract)
+
+fit_binom_Empl_Pract <- fitdist(czestosci_Empl_Pract, "binom", fix.arg = list(size = n_Empl_Pract), start = list(prob = p_Empl_Pract))
+
+wynik_binom_Empl_Pract <- gofstat(fit_binom_Empl_Pract)
+
+tabela_Empl_Pract <- data.frame(
+  statystyka = round(wynik_binom_Empl_Pract$chisq, 4),
+  df = wynik_binom_Empl_Pract$chisqdf,
+  p_value = round(wynik_binom_Empl_Pract$chisqpvalue, 4))
+```
+
+```{r, echo=FALSE}
+kable(tabela_Empl_Pract, caption = "Ocena dopasowania rozkładu dwumianowego") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "8em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+
+Brak podstaw do odrzucenia hipotezy zerowej. Warto również wziąć pod uwagę, że średnia liczba strat jest wyraźnie większa od wariancji, co jest charakterystyczne dla rozkładu dwumianowego. Można więc uznać go za odpowiedni dla opisu częstości strat w linii Empl_Pract.
+
+```{r}
+p_Empl_Pract <- fit_binom_Empl_Pract$estimate
+```
+
+
+Oszacowane parametry rozkładu dwumianowego:
+
+- $n = `r n_Empl_Pract`$
+- $p = `r round(p_Empl_Pract, 4)`$
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_Empl_Pract <- dane %>%
+  filter(linia == "Empl_Pract") %>%
+  pull(strata) 
+
+fit_gamma_Empl_Pract <- fitdist(straty_Empl_Pract, method = "mme", "gamma")
+
+fit_lognorm_Empl_Pract <- fitdist(straty_Empl_Pract, method = "mme", "lnorm")
+
+fit_weibull_Empl_Pract <- fitdist(straty_Empl_Pract, "weibull")
+
+fit_exp_Empl_Pract <- fitdist(straty_Empl_Pract, method = "mme", "exp")
+
+test_Empl_Pract <- gofstat(list(fit_gamma_Empl_Pract, fit_lognorm_Empl_Pract, fit_weibull_Empl_Pract, fit_exp_Empl_Pract))
+
+tabela_Empl_Pract <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+  `p-value (χ²)` = round(test_Empl_Pract$chisqpvalue, 4),
+  
+  KS = round(test_Empl_Pract$ks, 4),
+  
+ `Decyzja KS` = test_Empl_Pract$kstest,
+  
+  AD = round(test_Empl_Pract$ad, 4),
+  
+ `Decyzja AD` = test_Empl_Pract$adtest,
+  
+  AIC = round(test_Empl_Pract$aic, 2),
+  BIC = round(test_Empl_Pract$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+```{r, echo=FALSE}
+kable(tabela_Empl_Pract,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+
+```{r}
+denscomp(list(fit_gamma_Empl_Pract,
+              fit_lognorm_Empl_Pract,
+              fit_weibull_Empl_Pract,
+              fit_exp_Empl_Pract),
+         legendtext = c("gamma", "lognormal", "weibull", "wykładniczy"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+          fitlwd = c(3, 3, 3, 3),
+         main = "Porównanie dopasowania rozkładów",
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+```
+
+Dla linii Empl_Pract, analogicznie jak w przypadku poprzedniej (Damage), wyniki testów nie pozwalają na jednoznaczny wybór rozkładu.
+
+Rozkład Weibulla, mimo braku podstaw do odrzucenia hipotezy zerowej w teście chi-kwadrat oraz najniższych wartości kryteriów AIC i BIC, został odrzucony przez testy Kołmogorowa-Smirnowa i Andersona-Darlinga. Ma to istotne znaczenie w analizie dotkliwości strat, gdzie kluczowe jest dobre odwzorowanie ogona rozkładu.
+
+Wykres pokazuje, że rozkłady gamma, lognormalny oraz Weibulla w podobnym stopniu odwzorowują ogólny kształt danych, choć widoczne są niewielkie przesunięcia względem histogramu. Rozkład wykładniczy natomiast wyraźnie odbiega od danych, co potwierdzają zarówno przebieg wykresu, jak i wartości statystyk oraz kryteriów informacyjnych.
+
+Rozpatrywane rozkłady nie dają podstaw do jednoznacznego wyboru, więc do dalszej analizy - podobnie jak dla poprzedniej linii - przyjęto rozkład lognormalny.
+
+```{r}
+meanlog_Empl_Pract <- fit_lognorm_Empl_Pract$estimate["meanlog"]
+sdlog_Empl_Pract <- fit_lognorm_Empl_Pract$estimate["sdlog"]
+```
+
+
+Oszacowane parametry rozkładu lognormalnego:
+
+- $\text{meanlog} = `r round(meanlog_Empl_Pract, 4)`$
+- $\text{sdlog} = `r round(sdlog_Empl_Pract, 4)`$
+
+## Execut_Del
+ 
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+czestosci_Execut_Del <- czestosc %>%
+  filter(linia == "Execut_Del") %>%
+  pull(liczba_strat) 
+
+fit_ujemny_Execut_Del <- fitdist(czestosci_Execut_Del, "nbinom", method = "mme")
+
+wynik_Execut_Del <- gofstat(fit_ujemny_Execut_Del)
+
+tabela_ujemny_Execut_Del <- data.frame(
+  statystyka = round(wynik_Execut_Del$chisq, 4),
+  df = wynik_Execut_Del$chisqdf,
+  p_value = round(wynik_Execut_Del$chisqpvalue, 4))
+```
+
+
+```{r, echo=FALSE}
+kable(tabela_ujemny_Execut_Del, caption = "Ocena dopasowania rozkładu ujemnego dwumianowego") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "9em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+Brak podstaw do odrzucenia hipotezy zerowej. Wariancja liczby strat dla tej linii jest wyraźnie większa od średniej, co dodatkowo potwierdza zasadność wyboru rozkładu ujmnego dwumianowego. 
+
+```{r}
+rozmiar_ujemny_Execut_Del <- fit_ujemny_Execut_Del$estimate["size"]
+srednia_ujemny_Execut_Del <- fit_ujemny_Execut_Del$estimate["mu"]
+```
+
+Oszacowane parametry rozkładu ujemnego dwumianowego:
+
+- $\text{size} = `r round(rozmiar_ujemny_Execut_Del, 4)`$
+- $\mu = `r round(srednia_ujemny_Execut_Del, 4)`$ 
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_Execut_Del <- dane %>%
+  filter(linia == "Execut_Del") %>%
+  pull(strata) 
+
+fit_gamma_Execut_Del <- fitdist(straty_Execut_Del, method = "mme", "gamma")
+
+fit_lognorm_Execut_Del <- fitdist(straty_Execut_Del, method = "mme", "lnorm")
+
+fit_weibull_Execut_Del <- fitdist(straty_Execut_Del, "weibull")
+
+fit_exp_Execut_Del <- fitdist(straty_Execut_Del, method = "mme", "exp")
+
+test_Execut_Del <- gofstat(list(fit_gamma_Execut_Del, fit_lognorm_Execut_Del, fit_weibull_Execut_Del, fit_exp_Execut_Del))
+
+tabela_Execut_Del <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+ `p-value (χ²)` = round(test_Com_Ban$chisqpvalue, 4),
+  
+  KS = round(test_Execut_Del$ks, 4),
+  
+ `Decyzja KS` = test_Execut_Del$kstest,
+  
+  AD = round(test_Execut_Del$ad, 4),
+  
+ `Decyzja AD` = test_Execut_Del$adtest,
+  
+  AIC = round(test_Execut_Del$aic, 2),
+  BIC = round(test_Execut_Del$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+
+```{r, echo=FALSE}
+best <- which.min(tabela_Execut_Del$KS)
+
+kable(tabela_Execut_Del,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  row_spec(best, bold = TRUE, background = "#f2f2f2") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+```{r}
+denscomp(list(fit_gamma_Execut_Del,
+              fit_lognorm_Execut_Del,
+              fit_weibull_Execut_Del,
+              fit_exp_Execut_Del),
+         legendtext = c("Gamma", "Lognormal", "Weibull", "exp"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+          fitlwd = c(3, 3, 3, 3),
+         main = "Porównanie dopasowania rozkładów",
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+```
+
+W przypadku linii Execut_Del rozkład lognormalny jako jedyny został odrzucony w teście Kołomogorowa-Smirnowa, co pozwala wstępnie wykluczyć go z dalszych rozważań. 
+
+Mimo, że rozkład wykładniczy osiąga najniższe wartości kryteriów AIC i BIC, różnice względem rozkładów Weibulla oraz gamma są niewielkie. Jednocześnie dla rozkładu Weibulla możliwe było przeprowadzenie pełnej weryfikacji testem Andersona-Darlinga (szczególnie istotny w analizie dotkliwości strat). Rozkład ten nie został on odrzucony w tym teście, co stanowi jego istotną przewagę i zwiększa jego wiarygodność.
+
+Na wykresie widać, że rozkłady Weibulla, gamma oraz wykładniczy dobrze odwzorowują ogólny kształt danych. Jednak rozkłady gamma i wykładniczy osiągają wyższe wartości statystyki Andersona–Darlinga. Również w teście Kołmogorowa-Smirnowa wartości statystyk są wyższe w porównaniu do rozkładu Weibulla. Kryteria informacyjne, w szczególności AIC, są bardzo zbliżone dla tych trzech rozkładów. Natomiast rozkład lognormalny dobrze odwzorowuje początkową część rozkładu, jednak w dalszej jego części dopasowanie wygląda gorzej w porównaniu z pozostałymi rozkładami. 
+
+W związku z powyższym, uwzględniając wyniki testów zgodności oraz znaczenie dopasowania w ogonach, rozkład Weibulla został uznany za najbardziej odpowiedni dla dotkliwości strat tej linii. 
+
+```{r}
+shape_Execut_Del <- fit_weibull_Execut_Del$estimate["shape"]
+scale_Execut_Del <- fit_weibull_Execut_Del$estimate["scale"]
+```
+
+Oszacowane parametry rozkładu Weibulla:
+
+- $\text{shape} = `r round(shape_Execut_Del, 4)`$
+- $\text{scale} = `r round(scale_Execut_Del, 4)`$
+
+
+## External_Fr
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+czestosci_External_Fr <- czestosc %>%
+  filter(linia == "External_Fr") %>%
+  pull(liczba_strat) 
+
+fit_pois_External_Fr <- fitdist(czestosci_External_Fr, "pois")
+
+wynik_External_Fr <- gofstat(fit_pois_External_Fr)
+
+tabela_pois_External_Fr <- data.frame(
+  statystyka = round(wynik_External_Fr$chisq, 4),
+  df = wynik_External_Fr$chisqdf,
+  p_value = round(wynik_External_Fr$chisqpvalue, 4))
+```
+
+```{r, echo=FALSE}
+kable(tabela_pois_External_Fr, caption = "Ocena dopasowania rozkładu Poissona") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "7em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+Brak podstaw do odrzucenia hipotezy zerowej. Wynik jest zgodny z wcześniejszą analizą średniej i wariancji, w której obie wartości były zbliżone. Uzasadnia to wybór rozkładu Poissona dla częstości strat linii External_Fr. 
+
+```{r}
+lambda_External_Fr <- fit_pois_External_Fr$estimate
+```
+Oszacowane parametry rozkładu Poissona:
+
+- $\lambda = `r round(lambda_External_Fr, 4)`$
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_External_Fr <- dane %>%
+  filter(linia == "External_Fr") %>%
+  pull(strata) 
+
+fit_gamma_External_Fr <- fitdist(straty_External_Fr, method = "mme", "gamma")
+
+fit_lognorm_External_Fr <- fitdist(straty_External_Fr, method = "mme", "lnorm")
+
+fit_weibull_External_Fr <- fitdist(straty_External_Fr, "weibull")
+
+fit_exp_External_Fr <- fitdist(straty_External_Fr, method = "mme", "exp")
+
+test_External_Fr <- gofstat(list(fit_gamma_External_Fr, fit_lognorm_External_Fr, fit_weibull_External_Fr, fit_exp_External_Fr))
+
+tabela_External_Fr <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+  `p-value (χ²)` = round(test_External_Fr$chisqpvalue, 4),
+  
+  KS = round(test_External_Fr$ks, 4),
+  
+ `Decyzja KS` = test_External_Fr$kstest,
+  
+  AD = round(test_External_Fr$ad, 4),
+  
+ `Decyzja AD` = test_External_Fr$adtest,
+  
+  AIC = round(test_External_Fr$aic, 2),
+  BIC = round(test_External_Fr$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+```{r, echo=FALSE}
+best <- which.min(tabela_External_Fr$AIC)
+
+kable(tabela_External_Fr,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  row_spec(best, bold = TRUE, background = "#f2f2f2") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+```{r}
+denscomp(list(fit_gamma_External_Fr,
+              fit_lognorm_External_Fr,
+              fit_weibull_External_Fr,
+              fit_exp_External_Fr),
+         legendtext = c("gamma", "lognormal", "weibull", "wykładniczy"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+          fitlwd = c(3, 3, 3, 3),
+         main = "Porównanie dopasowania rozkładów",
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+```
+
+Dla linii External_Fr rozkład wykładniczy został odrzucony w testach chi-kwadrat oraz Kołomogorowa-Smirnowa, a bardzo wysoka wartość statystyki Andersona-Darlinga dodatkowo wskazuje na jego wyraźne niedopasowanie do danych. Z kolei rozkład Weibulla, mimo dobrych wyników statystyki Kołmogorowa-Smirnowa, został odrzucony na podstawie testu Andersona-Darlinga, co sugeruje problemy z dopasowaniem w ogonach rozkładu. 
+
+Wykres potwierdza te wnioski - rozkład wykładniczy wyraźnie odbiega od histogramu, natomiast rozkład Weibulla jest nieco przesunięty względem danych. 
+
+Najlepsze dopasowanie wizualne zapewniają rozkłady gamma oraz lognormalny, które w podobnym stopniu odwzorowują kształt danych. Jednak rozkład lognormalny został odrzucony w teście chi-kwadrat, a dodatkowo osiąga wyższe wartości kryteriów informacyjnych AIC i BIC oraz wyższe wartości statystyk Kołmogorowa-Smirnowa i Andersona-Darlinga w porównaniu do rozkładu gamma. Z tego względu rozkład gamma można uznać za najbardziej odpowiedni.
+
+```{r}
+shape_External_Fr <- fit_gamma_External_Fr$estimate["shape"]
+rate_External_Fr   <- fit_gamma_External_Fr$estimate["rate"]
+```
+
+Oszacowane prametry rozkładu gamma:
+
+- $\text{shape} = `r round(shape_External_Fr, 4)`$
+- $\text{rate} = `r round(rate_External_Fr, 4)`$
+
+## Internal_Fr
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD CZĘSTOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+czestosci_Internal_Fr <- czestosc %>%
+  filter(linia == "Internal_Fr") %>%
+  pull(liczba_strat) 
+
+p_Internal_Fr <- 1 - (statystyki$wariancja[statystyki$linia == "Internal_Fr"]/statystyki$srednia[statystyki$linia == "Internal_Fr"])
+
+n_Internal_Fr <- round(statystyki$srednia[statystyki$linia == "Internal_Fr"]/p_Internal_Fr)
+
+fit_binom_Internal_Fr <- fitdist(czestosci_Internal_Fr, "binom", fix.arg = list(size = n_Internal_Fr), start = list(prob = p_Internal_Fr))
+
+wynik_binom_Internal_Fr <- gofstat(fit_binom_Internal_Fr)
+
+tabela_binom_Internal_Fr <- data.frame(
+  statystyka = round(wynik_binom_Internal_Fr$chisq, 4),
+  df = wynik_binom_Internal_Fr$chisqdf,
+  p_value = round(wynik_binom_Internal_Fr$chisqpvalue, 4))
+```
+
+```{r, echo=FALSE}
+kable(tabela_binom_Internal_Fr, caption = "Ocena dopasowania rozkładu dwumianowego") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  column_spec(1:3, width = "7em") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154")
+```
+
+Rozkład dwumianowy nie został odrzucony w teście zgodności, a przewaga średniej nad wariancją dodatkowo potwierdza zasadność wyboru tego rozkładu. 
+
+```{r}
+p_Internal_Fr <- fit_binom_Internal_Fr$estimate
+```
+
+
+Oszacowane parametry rozkładu dwumianowego:
+
+- $n = `r n_Internal_Fr`$
+- $p = `r round(p_Internal_Fr, 4)`$
+
+<div style="text-align: center; font-weight: bold; font-size: 18px; margin-top: 20px;">
+ROZKŁAD DOTKLIWOŚCI STRAT
+</div>
+<hr style="width: 40%; margin: 5px auto 15px auto;">
+
+```{r, warning=FALSE}
+straty_Internal_Fr <- dane %>%
+  filter(linia == "Internal_Fr") %>%
+  pull(strata) 
+
+fit_gamma_Internal_Fr <- fitdist(straty_Internal_Fr, method = "mme", "gamma")
+
+fit_lognorm_Internal_Fr <- fitdist(straty_Internal_Fr, method = "mme", "lnorm")
+
+fit_weibull_Internal_Fr <- fitdist(straty_Internal_Fr, "weibull")
+
+fit_exp_Internal_Fr <- fitdist(straty_Internal_Fr, method = "mme", "exp")
+
+test_Internal_Fr <- gofstat(list(fit_gamma_Internal_Fr, fit_lognorm_Internal_Fr, fit_weibull_Internal_Fr, fit_exp_Internal_Fr))
+
+tabela_Internal_Fr <- data.frame(
+  Rozklad = c("gamma", "lnorm", "weibull", "exp"),
+  
+ `p-value (χ²)` = round(test_Internal_Fr$chisqpvalue, 4),
+  
+  KS = round(test_Internal_Fr$ks, 4),
+  
+ `Decyzja KS` = test_Internal_Fr$kstest,
+  
+  AD = round(test_Internal_Fr$ad, 4),
+  
+ `Decyzja AD` = test_Internal_Fr$adtest,
+  
+  AIC = round(test_Internal_Fr$aic, 2),
+  BIC = round(test_Internal_Fr$bic, 2),
+  
+  row.names = NULL,
+  check.names = FALSE)
+```
+
+```{r, echo=FALSE}
+kable(tabela_Internal_Fr,
+      caption = "Porównanie dopasowania rozkładów dotkliwości") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+
+```{r}
+par(mfrow = c(1, 2))
+
+hist(straty_Internal_Fr,
+     breaks = 50,
+     col = "lightgrey",
+     main = "Histogram strat",
+     xlab = "Wartość straty",
+     ylab = "Liczba obserwacji")
+
+denscomp(list(fit_gamma_Internal_Fr,
+              fit_lognorm_Internal_Fr,
+              fit_weibull_Internal_Fr,
+              fit_exp_Internal_Fr),
+         legendtext = c("Gamma", "Lognormal", "Weibull", "exp"),
+         datacol = c("lightgrey"),
+          fitcol = c("#440154FF", "#31688EFF", "#35B779FF", "#FDE725FF"),
+         fitlty = c(1, 1, 4, 2),
+         fitlwd = c(3, 3, 3, 3),
+         main = "Dopasowanie rozkładów",
+         xlim = c(10, 2000),
+         xlab = "Wartość straty",
+         ylab = "Gęstość")
+         
+
+par(mfrow = c(1, 1))
+```
+
+W przypadku linii Internal_Fr wyniki testów uniemożliwiają jednoznaczy dobór odpowiedniego rozkładu. Wszystkie analizowane rozkłady zostały odrzucone w teście Kołmogorowa-Smirnowa oraz chi-kwadrat, a wartości statystyk Andersona-Darlinga są bardzo wysokie, co dodatkowo potwierdza ich niedopasowanie.
+
+Sytuacja jest analogiczna do tej, która została zaobserwowana dla linii Damage. Dane charakteryzują się bardzo silną koncentracją obserwacji przy minimalnej wartości (równej 10), co prowadzi do powstania wyraźnego piku na histogramie. Jednocześnie występują bardzo duże straty, tworzące długi ogon rozkładu. Takie połączenie powoduje, że dane mają skrajnie asymetryczny i trudny do uchwycenia charakter.
+
+Na wykresie dopasowania widać, że rozkłady różnie radzą sobie z tą sytuacją. Rozkład Weibulla najlepiej dopasowuje się do początkowej części danych. Rozkłady gamma i lognormalny są bardziej wygładzone i nie oddają w pełni maksimum histogramu, natomiast rozkład wykładniczy jest praktycznie płaski, co powoduje, że nie odzwierciedla charakterystycznego kształtu danych.
+
+Ze względu na trudności w jednoznacznym wyborze rozkładu - podobnie jak w przypadku linii Damage - przyjęto rozkład lognormalny jako rozwiązanie kompromisowe.
+
+```{r}
+meanlog_Internal_Fr <- fit_lognorm_Internal_Fr$estimate["meanlog"]
+sdlog_Internal_Fr <- fit_lognorm_Internal_Fr$estimate["sdlog"]
+```
+
+
+Oszacowane parametry rozkładu lognormalnego:
+
+- $\text{meanlog} = `r round(meanlog_Internal_Fr, 4)`$
+- $\text{sdlog} = `r round(sdlog_Internal_Fr, 4)`$
+
+
+# Symulacyjny rozkład strat
+
+Symulacja rocznych strat została przeprowadzona dla każdej linii oddzielnie. Dla każdego scenariusza losowana jest liczba zdarzeń w roku z dopasowanego wcześniej rozkładu częstości, a następnie generowane są wartości tych strat z rozkładu dotkliwości. Ich suma to łączna strata roczna. 
+
+Kolejnym krokiem jest wyznaczenie łącznej straty jako sumy strat ze wszystkich linii w danym scenariuszu.
+
+```{r}
+set.seed(423)
+
+liczba_scenariuszy <- 20000
+
+
+straty_roczne_Buss_Distr <- replicate(liczba_scenariuszy, {
+  
+   liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Buss_Distr, mu = srednia_ujemny_Buss_Distr)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Buss_Distr))
+})
+
+
+straty_roczne_Com_Ban <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Com_Ban, mu = srednia_ujemny_Com_Ban)
+  
+  sum(rlnorm(liczba_strat, meanlog_Com_Ban, sdlog_Com_Ban))
+}) 
+
+straty_roczne_Damage <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Damage, p_Damage)
+  
+  sum(rlnorm(liczba_strat, meanlog_Damage, sdlog_Damage))
+})
+
+straty_roczne_Empl_Pract <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Empl_Pract, p_Empl_Pract)
+  
+  sum(rlnorm(liczba_strat, meanlog_Empl_Pract, sdlog_Empl_Pract))
+})
+
+straty_roczne_Execut_Del <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Execut_Del, mu = srednia_ujemny_Execut_Del)
+  
+  sum(rweibull(liczba_strat, shape_Execut_Del, scale_Execut_Del))
+})
+
+straty_roczne_External_Fr <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rpois(1, lambda_External_Fr)
+  
+  sum(rgamma(liczba_strat, shape_External_Fr, rate_External_Fr))
+})
+
+straty_roczne_Internal_Fr <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Internal_Fr, p_Internal_Fr)
+  
+  sum(rlnorm(liczba_strat, meanlog_Internal_Fr, sdlog_Internal_Fr))
+})
+
+straty_bank <- straty_roczne_Buss_Distr + straty_roczne_Com_Ban + straty_roczne_Damage + straty_roczne_Empl_Pract + straty_roczne_Execut_Del + straty_roczne_External_Fr + straty_roczne_Internal_Fr
+
+scenariusze <- data.frame(
+  Buss_Distr = straty_roczne_Buss_Distr,
+  Com_Ban = straty_roczne_Com_Ban,
+  Damage = straty_roczne_Damage,
+  Empl_Pract = straty_roczne_Empl_Pract,
+  Execut_Del = straty_roczne_Execut_Del,
+  External_Fr = straty_roczne_External_Fr,
+  Internal_Fr = straty_roczne_Internal_Fr,
+  Suma = straty_bank
+)
+```
+
+```{r, echo=FALSE}
+scenariusze %>%
+  head(100) %>%
+  kable(caption = "Pierwsze 100 scenariuszy") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  scroll_box(height = "300px")
+```
+
+# OpVaR oraz OpES 99.9%
+
+```{r}
+OpVaR <- as.numeric(quantile(straty_bank, 0.999, type = 7))
+
+posortowane <- sort(straty_bank, decreasing = TRUE)
+
+OpES <- mean(posortowane[1:20])
+
+OpES_wariant2 <- mean(straty_bank[straty_bank >= OpVaR])
+```
+
+```{r, echo=FALSE}
+wyniki <- data.frame(
+  Miara = c("OpVaR", "OpES"),
+  Wartosc = formatC(c(OpVaR, OpES),
+                    format = "f",
+                    digits = 2,
+                    big.mark = " ")
+)
+
+kable(wyniki) %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+```{r, echo=FALSE}
+opVaR_fmt <- formatC(OpVaR, format = "f", digits = 2, big.mark = " ")
+opES_fmt  <- formatC(OpES,  format = "f", digits = 2, big.mark = " ")
+```
+
+
+OpVaR wynosi `r opVaR_fmt`. Oznacza to, że w 99.9% przypadków roczna strata portfela ryzyka operacyjnego nie przekroczy tej wartości. Jedynie w 0.1% najbardziej niekorzystnych scenariuszy strata może być wyższa.
+
+OpES wynosi `r opES_fmt` i jest wyraźnie wyższy od wartości OpVaR. Miara ta określa jaka będzie średnia strata wśród 0.1% najgorszych scenariuszy, czyli tych, w których strata przekracza wartość OpVaR. 
+
+
+# Dopasowanie rozkładów "na siłę"
+
+W tej części projektu przyjęto różne założenia dotyczące rozkładu dotkliwości strat, niezależnie od wcześniejszych testów dopasowania. Dla każdej linii założono rozkład lognormalny, wykładniczy lub Weibulla.
+
+Na podstawie danych oszacowano parametry tych rozkładów i wykorzystano je do symulacji rozkładu strat. Następnie wyznaczono miary ryzyka OpVaR i OpES na poziomie 99.9%, aby sprawdzić, jak wybór rozkładu wpływa na wyniki.
+
+## Rozkład lognormalny 
+
+```{r}
+meanlog_Buss_Distr <- fit_lognorm_Buss_Distr$estimate["meanlog"]
+sdlog_Buss_Distr <- fit_lognorm_Buss_Distr$estimate["sdlog"]
+
+meanlog_Execut_Del <- fit_lognorm_Execut_Del$estimate["meanlog"]
+sdlog_Execut_Del <- fit_lognorm_Execut_Del$estimate["sdlog"]
+
+meanlog_External_Fr <- fit_lognorm_External_Fr$estimate["meanlog"]
+sdlog_External_Fr <- fit_lognorm_External_Fr$estimate["sdlog"]
+
+parametry_lognormal <- data.frame(
+  Linia = c("Buss_Distr", "Com_Ban", "Damage", "Empl_Pract",
+            "Execut_Del", "External_Fr", "Internal_Fr"),
+  
+  meanlog = c(meanlog_Buss_Distr,
+              meanlog_Com_Ban,
+              meanlog_Damage,
+              meanlog_Empl_Pract,
+              meanlog_Execut_Del,
+              meanlog_External_Fr,
+              meanlog_Internal_Fr),
+  
+  sdlog = c(sdlog_Buss_Distr,
+            sdlog_Com_Ban,
+            sdlog_Damage,
+            sdlog_Empl_Pract,
+            sdlog_Execut_Del,
+            sdlog_External_Fr,
+            sdlog_Internal_Fr)
+)
+
+parametry_lognormal[, -1] <- round(parametry_lognormal[, -1], 4)
+```
+
+```{r, echo=FALSE}
+parametry_lognormal %>%
+  kable(caption = "Oszacowane parametry rozkładu lognormalnego") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(2:3, background = "#f5f5f5")
+```
+
+```{r}
+straty_roczne_Buss_Distr_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Buss_Distr, mu = srednia_ujemny_Buss_Distr)
+  
+  sum(rlnorm(liczba_strat, meanlog_Buss_Distr, sdlog_Buss_Distr))
+})
+
+straty_roczne_Com_Ban_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Com_Ban, mu = srednia_ujemny_Com_Ban)
+  
+  sum(rlnorm(liczba_strat, meanlog_Com_Ban, sdlog_Com_Ban))
+}) 
+
+straty_roczne_Damage_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Damage, p_Damage)
+  
+  sum(rlnorm(liczba_strat, meanlog_Damage, sdlog_Damage))
+})
+
+straty_roczne_Empl_Pract_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Empl_Pract, p_Empl_Pract)
+  
+  sum(rlnorm(liczba_strat, meanlog_Empl_Pract, sdlog_Empl_Pract))
+})
+
+straty_roczne_Execut_Del_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Execut_Del, mu = srednia_ujemny_Execut_Del)
+  
+  sum(rlnorm(liczba_strat, meanlog_Execut_Del, sdlog_Execut_Del))
+})
+
+straty_roczne_External_Fr_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rpois(1, lambda_External_Fr)
+  
+  sum(rlnorm(liczba_strat, meanlog_External_Fr, sdlog_External_Fr))
+})
+
+straty_roczne_Internal_Fr_lognorm <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Internal_Fr, p_Internal_Fr)
+  
+  sum(rlnorm(liczba_strat, meanlog_Internal_Fr, sdlog_Internal_Fr))
+})
+
+straty_bank_lognorm <- straty_roczne_Buss_Distr_lognorm +
+  straty_roczne_Com_Ban_lognorm +
+  straty_roczne_Damage_lognorm +
+  straty_roczne_Empl_Pract_lognorm +
+  straty_roczne_Execut_Del_lognorm +
+  straty_roczne_External_Fr_lognorm +
+  straty_roczne_Internal_Fr_lognorm
+
+scenariusze_lognorm <- data.frame(
+  Buss_Distr = straty_roczne_Buss_Distr_lognorm,
+  Com_Ban = straty_roczne_Com_Ban_lognorm,
+  Damage = straty_roczne_Damage_lognorm,
+  Empl_Pract = straty_roczne_Empl_Pract_lognorm,
+  Execut_Del = straty_roczne_Execut_Del_lognorm,
+  External_Fr = straty_roczne_External_Fr_lognorm,
+  Internal_Fr = straty_roczne_Internal_Fr_lognorm,
+  Suma = straty_bank_lognorm
+)
+```
+
+
+## Rozkład wykładniczy
+
+```{r}
+rate_exp_Com_Ban <- fit_exp_Com_Ban$estimate
+
+rate_exp_Damage <- fit_exp_Damage$estimate
+
+rate_exp_Empl_Pract <- fit_exp_Empl_Pract$estimate
+
+rate_exp_Execut_Del <- fit_exp_Execut_Del$estimate
+
+rate_exp_External_Fr <- fit_exp_External_Fr$estimate
+
+rate_exp_Internal_Fr <- fit_exp_Internal_Fr$estimate
+
+parametry_exp <- data.frame(
+  Linia = c("Buss_Distr", "Com_Ban", "Damage", "Empl_Pract",
+            "Execut_Del", "External_Fr", "Internal_Fr"),
+  
+  rate = c(rate_exp_Buss_Distr,
+              rate_exp_Com_Ban,
+              rate_exp_Damage,
+              rate_exp_Empl_Pract,
+              rate_exp_Execut_Del,
+              rate_exp_External_Fr,
+              rate_exp_Internal_Fr)
+)
+```
+
+
+```{r, echo=FALSE}
+parametry_exp %>%
+  kable(caption = "Oszacowane parametry rozkładu wykładniczego") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(2, background = "#f5f5f5")
+```
+
+```{r}
+straty_roczne_Buss_Distr_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Buss_Distr, mu = srednia_ujemny_Buss_Distr)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Buss_Distr))
+})
+
+straty_roczne_Com_Ban_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Com_Ban, mu = srednia_ujemny_Com_Ban)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Com_Ban))
+}) 
+
+straty_roczne_Damage_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Damage, p_Damage)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Damage))
+})
+
+straty_roczne_Empl_Pract_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Empl_Pract, p_Empl_Pract)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Empl_Pract))
+})
+
+straty_roczne_Execut_Del_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Execut_Del, mu = srednia_ujemny_Execut_Del)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Execut_Del))
+})
+
+straty_roczne_External_Fr_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rpois(1, lambda_External_Fr)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_External_Fr))
+})
+
+straty_roczne_Internal_Fr_exp <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Internal_Fr, p_Internal_Fr)
+  
+  sum(rexp(liczba_strat, rate = rate_exp_Internal_Fr))
+})
+
+straty_bank_exp <- straty_roczne_Buss_Distr_exp +
+  straty_roczne_Com_Ban_exp +
+  straty_roczne_Damage_exp +
+  straty_roczne_Empl_Pract_exp +
+  straty_roczne_Execut_Del_exp +
+  straty_roczne_External_Fr_exp +
+  straty_roczne_Internal_Fr_exp
+
+scenariusze_exp <- data.frame(
+  Buss_Distr = straty_roczne_Buss_Distr_exp,
+  Com_Ban = straty_roczne_Com_Ban_exp,
+  Damage = straty_roczne_Damage_exp,
+  Empl_Pract = straty_roczne_Empl_Pract_exp,
+  Execut_Del = straty_roczne_Execut_Del_exp,
+  External_Fr = straty_roczne_External_Fr_exp,
+  Internal_Fr = straty_roczne_Internal_Fr_exp,
+  Suma = straty_bank_exp
+)
+```
+
+
+## Rozkład Weibulla 
+
+```{r}
+shape_Buss_Distr <- fit_weibull_Buss_Distr$estimate["shape"]
+scale_Buss_Distr <- fit_weibull_Buss_Distr$estimate["scale"]
+
+shape_Com_Ban <- fit_weibull_Com_Ban$estimate["shape"]
+scale_Com_Ban <- fit_weibull_Com_Ban$estimate["scale"]
+
+shape_Damage <- fit_weibull_Damage$estimate["shape"]
+scale_Damage <- fit_weibull_Damage$estimate["scale"]
+
+shape_Empl_Pract <- fit_weibull_Empl_Pract$estimate["shape"]
+scale_Empl_Pract <- fit_weibull_Empl_Pract$estimate["scale"]
+
+shape_External_Fr <- fit_weibull_External_Fr$estimate["shape"]
+scale_External_Fr <- fit_weibull_External_Fr$estimate["scale"]
+
+shape_Internal_Fr <- fit_weibull_Internal_Fr$estimate["shape"]
+scale_Internal_Fr <- fit_weibull_Internal_Fr$estimate["scale"]
+
+parametry_weibull <- data.frame(
+  Linia = c("Buss_Distr", "Com_Ban", "Damage", "Empl_Pract",
+            "Execut_Del", "External_Fr", "Internal_Fr"),
+  
+  shape = c(shape_Buss_Distr,
+            shape_Com_Ban,
+            shape_Damage,
+            shape_Empl_Pract,
+            shape_Execut_Del,
+            shape_External_Fr,
+            shape_Internal_Fr),
+  
+  scale = c(scale_Buss_Distr,
+            scale_Com_Ban,
+            scale_Damage,
+            scale_Empl_Pract,
+            scale_Execut_Del,
+            scale_External_Fr,
+            scale_Internal_Fr)
+)
+
+parametry_weibull[, -1] <- round(parametry_weibull[, -1], 4)
+```
+
+```{r, echo=FALSE}
+parametry_weibull %>%
+  kable(caption = "Oszacowane parametry rozkładu Weibulla") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(2:3, background = "#f5f5f5")
+```
+
+```{r}
+straty_roczne_Buss_Distr_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Buss_Distr, mu = srednia_ujemny_Buss_Distr)
+  
+  sum(rweibull(liczba_strat, shape = shape_Buss_Distr, scale = scale_Buss_Distr))
+})
+
+straty_roczne_Com_Ban_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Com_Ban, mu = srednia_ujemny_Com_Ban)
+  
+  sum(rweibull(liczba_strat, shape = shape_Com_Ban, scale = scale_Com_Ban))
+}) 
+
+straty_roczne_Damage_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Damage, p_Damage)
+  
+  sum(rweibull(liczba_strat, shape = shape_Damage, scale = scale_Damage))
+})
+
+straty_roczne_Empl_Pract_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Empl_Pract, p_Empl_Pract)
+  
+  sum(rweibull(liczba_strat, shape = shape_Empl_Pract, scale = scale_Empl_Pract))
+})
+
+straty_roczne_Execut_Del_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Execut_Del, mu = srednia_ujemny_Execut_Del)
+  
+  sum(rweibull(liczba_strat, shape = shape_Execut_Del, scale = scale_Execut_Del))
+})
+
+straty_roczne_External_Fr_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rpois(1, lambda_External_Fr)
+  
+  sum(rweibull(liczba_strat, shape = shape_External_Fr, scale = scale_External_Fr))
+})
+
+straty_roczne_Internal_Fr_weibull <- replicate(liczba_scenariuszy, {
+  
+  liczba_strat <- rbinom(1, n_Internal_Fr, p_Internal_Fr)
+  
+  sum(rweibull(liczba_strat, shape = shape_Internal_Fr, scale = scale_Internal_Fr))
+})
+
+straty_bank_weibull <- straty_roczne_Buss_Distr_weibull +
+  straty_roczne_Com_Ban_weibull +
+  straty_roczne_Damage_weibull +
+  straty_roczne_Empl_Pract_weibull +
+  straty_roczne_Execut_Del_weibull +
+  straty_roczne_External_Fr_weibull +
+  straty_roczne_Internal_Fr_weibull
+
+scenariusze_weibull <- data.frame(
+  Buss_Distr = straty_roczne_Buss_Distr_weibull,
+  Com_Ban = straty_roczne_Com_Ban_weibull,
+  Damage = straty_roczne_Damage_weibull,
+  Empl_Pract = straty_roczne_Empl_Pract_weibull,
+  Execut_Del = straty_roczne_Execut_Del_weibull,
+  External_Fr = straty_roczne_External_Fr_weibull,
+  Internal_Fr = straty_roczne_Internal_Fr_weibull,
+  Suma = straty_bank_weibull
+)
+```
+
+
+## Porównanie
+
+```{r}
+# lognormalny
+
+OpVaR_lognorm <- as.numeric(quantile(straty_bank_lognorm, 0.999, type = 7))
+
+posortowane_lognorm <- sort(straty_bank_lognorm, decreasing = TRUE)
+
+OpES_lognorm <- mean(posortowane_lognorm[1:20])
+
+# wykładniczy
+
+OpVaR_exp <- as.numeric(quantile(straty_bank_exp, 0.999, type = 7))
+
+posortowane_exp <- sort(straty_bank_exp, decreasing = TRUE)
+
+OpES_exp <- mean(posortowane_exp[1:20])
+
+# Weibulla
+
+OpVaR_weibull <- as.numeric(quantile(straty_bank_weibull, 0.999, type = 7))
+
+posortowane_weibull <- sort(straty_bank_weibull, decreasing = TRUE)
+
+OpES_weibull <- mean(posortowane_weibull[1:20])
+
+
+porownanie <- data.frame(
+  Rozkład = c("oryginalny", "lognormalny", "wykładniczy", "Weibulla"),
+  
+  OpVaR = formatC(c(OpVaR, OpVaR_lognorm, OpVaR_exp, OpVaR_weibull),
+                    format = "f",
+                    digits = 2,
+                    big.mark = " "),
+  
+  OpES = formatC(c(OpES, OpES_lognorm, OpES_exp, OpES_weibull),
+                    format = "f",
+                    digits = 2,
+                    big.mark = " ")
+)
+```
+
+```{r, echo=FALSE}
+porownanie %>%
+kable(caption = "Porównanie miar ryzyka") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+Uzyskane wyniki miar ryzyka różnią się w zależności od przyjętego rozkładu dotkliwości strat. Najwyższe wartości OpVaR oraz OpES uzyskano dla podejścia oryginalnego, co prawdopodobnie wynika z indywidualnego doboru rozkładów dla każdej linii na podstawie testów zgodności. Pozwoliło to na lepsze dopasowanie do specyfiki danych oraz dokładniejsze odwzorowanie ekstremalnych obserwacji. Podejście oryginalne ma też swoje ograniczenia. Wyniki symulacji zależą od trafności dopasowania rozkładów oraz zakresu dostępnych danych.
+
+Dobre dopasowanie rozkładu do danych, zwłaszcza w jego ogonie, ma kluczowe znaczenie dla poprawnej estymacji miar ryzyka, ponieważ to właśnie ogon odpowiada za ekstremalne straty. Dopasowanie w centralnej części rozkładu nie jest w tym przypadku wystarczające.
+
+Spośród rozkładów założonych „na siłę” najwyższe wartości uzyskano dla rozkładu lognormalnego. Rozkład ten często traktowany jest jako ciężkoogonowy, co oznacza, że dopuszcza relatywnie częstsze występowanie bardzo dużych wartości. Dzięki temu lepiej odwzorowuje ekstremalne straty, co przekłada się na wyższe oszacowania miar ryzyka.
+
+Rozkłady wykładniczy oraz Weibulla prowadzą do niższych oszacowań OpVaR i OpES. Wynika to z faktu, że są one, w przeciwieństwie do lognormalnego, traktowane jako rozkłady o lekkich ogonach, przez co mają trudność z uchwyceniem rzadkich, ale bardzo dużych strat. W literaturze wskazuje się, że rozkłady tego typu często nie zapewniają dobrego dopasowania do danych operacyjnych i mogą prowadzić do zaniżonych oszacowań.
+
+Praktyczną konsekwencją jest to, że przyjęcie niewłaściwego rozkładu może prowadzić do niedoszacowania lub przeszacowania ryzyka operacyjnego. Zastosowanie rozkładów o zbyt lekkim ogonie może skutkować zaniżeniem wartości narażonej na ryzyko. Z kolei rozkłady lepiej odwzorowujące ogon, takie jak lognormalny, prowadzą do wyższych i bardziej ostrożnych oszacowań.
+
+# Procedura zastosowana n razy
+
+Aby sprawdzić stabilność wyników przeprowadzono 50 niezależnych powtórzeń symulacji. W każdej iteracji generowano zbiór 20 000 scenariuszy strat, a następnie na jego podstawie wyznaczano wartości OpVaR oraz OpES.   
+
+```{r}
+jedna_symulacja <- function() {
+  
+  straty_roczne_Buss_Distr <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Buss_Distr, mu = srednia_ujemny_Buss_Distr)
+    sum(rexp(liczba_strat, rate = rate_exp_Buss_Distr))
+  })
+  
+  straty_roczne_Com_Ban <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Com_Ban, mu = srednia_ujemny_Com_Ban)
+    sum(rlnorm(liczba_strat, meanlog_Com_Ban, sdlog_Com_Ban))
+  })
+  
+  straty_roczne_Damage <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rbinom(1, n_Damage, p_Damage)
+    sum(rlnorm(liczba_strat, meanlog_Damage, sdlog_Damage))
+  })
+  
+  straty_roczne_Empl_Pract <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rbinom(1, n_Empl_Pract, p_Empl_Pract)
+    sum(rlnorm(liczba_strat, meanlog_Empl_Pract, sdlog_Empl_Pract))
+  })
+  
+  straty_roczne_Execut_Del <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rnbinom(1, size = rozmiar_ujemny_Execut_Del, mu = srednia_ujemny_Execut_Del)
+    sum(rweibull(liczba_strat, shape_Execut_Del, scale_Execut_Del))
+  })
+  
+  straty_roczne_External_Fr <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rpois(1, lambda_External_Fr)
+    sum(rgamma(liczba_strat, shape_External_Fr, rate_External_Fr))
+  })
+  
+  straty_roczne_Internal_Fr <- replicate(liczba_scenariuszy, {
+    liczba_strat <- rbinom(1, n_Internal_Fr, p_Internal_Fr)
+    sum(rlnorm(liczba_strat, meanlog_Internal_Fr, sdlog_Internal_Fr))
+  })
+  
+  straty_bank <- straty_roczne_Buss_Distr + straty_roczne_Com_Ban + straty_roczne_Damage +
+    straty_roczne_Empl_Pract + straty_roczne_Execut_Del + straty_roczne_External_Fr +
+    straty_roczne_Internal_Fr
+  
+  OpVaR <- as.numeric(quantile(straty_bank, 0.999, type = 7))
+  
+  posortowane <- sort(straty_bank, decreasing = TRUE)
+  OpES <- mean(posortowane[1:20])
+  
+  c(OpVaR = OpVaR, OpES = OpES)
+}
+
+wyniki_powtorzen <- replicate(50, jedna_symulacja())
+
+wyniki_powtorzen <- wyniki_powtorzen %>%
+  t() %>%
+  as.data.frame()
+
+podsumowanie <- data.frame(
+  Miara = c("OpVaR", "OpES"),
+  
+  Srednia = c(mean(wyniki_powtorzen$OpVaR),
+              mean(wyniki_powtorzen$OpES)),
+  
+  Odchylenie_standardowe = c(sd(wyniki_powtorzen$OpVaR),
+                             sd(wyniki_powtorzen$OpES))
+)
+
+podsumowanie$Wspolczynnik_zmiennosci <- 
+  round(podsumowanie$Odchylenie_standardowe / podsumowanie$Srednia * 100, 2)
+```
+
+```{r, echo=FALSE}
+podsumowanie %>%
+  kable(caption = "Końcowe oszacowania OpVaR i OpES z odchyleniem standardowym") %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = "condensed"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#440154") %>%
+  column_spec(1, bold = TRUE)
+```
+
+Obie miary charakteryzują się stosunkowo niską zmiennością, co wskazuje na stabilność wyników symulacji. Jednocześnie OpES wykazuje większą zmienność niż OpVaR, co wynika z jego zależności od najbardziej ekstremalnych scenariuszy strat.
+
+Jest to również widoczne przy porównaniu z wynikiem pojedynczej symulacji - w tym przypadku wartość OpES była wyraźnie wyższa (około 10 mln), a OpVaR był na podobnym poziomie. 
+
+Można zauważyć też, że w przypadku dopasowania rozkładów "na siłę" wartości rozkładu lognormalnego uzyskane w pojedynczej symulacji są bardziej zbliżone do wyników uśrednionych.
+
+
+```{r}
+boxplot(wyniki_powtorzen$OpVaR,
+        wyniki_powtorzen$OpES,
+        names = c("OpVaR", "OpES"),
+        col = c("#C2A5CF", "#31688e"),
+        main = "Rozkład OpVaR i OpES",
+        ylab = "Wartość",
+        border = "black")
+```
+
+Wykres pudełkowy potwierdza wcześniejsze wnioski. Wartości OpES są wyższe od OpVaR, co widać zarówno w położeniu mediany, jak i całym zakresie obserwacji.
+
+OpES charakteryzuje się większą zmiennością - szerszy zakres wartości, większy rozstęp międzykwartylowy oraz obecność bardziej skrajnych wartości odstających. 
+
+OpVaR jest bardziej skoncentrowany wokół mediany. Wskazuje to na większą stabilność tej miary.
+
+Podsumowując, przeprowadzenie wielokrotnych symulacji pozwala ograniczyć wpływ losowości pojedynczego przebiegu i uzyskać bardziej wiarygodne oszacowania miar ryzyka. Pojedyncza symulacja może prowadzić do różnych wartości, szczególnie w przypadku OpES.  
